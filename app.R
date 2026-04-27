@@ -1,21 +1,18 @@
 library(shiny)
-
 library(bslib)
-
 library(reactable)
-
-library(tidyverse)
-
-library(ggplot2)
 
 ui <- page_sidebar(
   title = "One-Proportion Hypothesis Test",
+  window_title = "One-Proportion Hypothesis Test",
+
   theme = bs_theme(
-    primary = '#A90533',
+    primary = "#A90533",
     "navbar-bg" = "#A90533",
     "card-header-bg" = "#A90533",
     "card-header-color" = "white"
   ),
+
   tags$head(
     tags$style(
       HTML(
@@ -27,17 +24,21 @@ ui <- page_sidebar(
       )
     )
   ),
+
   sidebar = sidebar(
     radioButtons(
       "input_type",
       "Input Type",
       choices = c(
         "Sample Proportion" = "prop",
-        "Number of Successes" = "count"
+        "Number of Successes" = "count",
+        "Upload CSV" = "csv"
       ),
       selected = "prop"
     ),
+
     withMathJax(),
+
     tags$label(HTML("Null Proportion, \\(p_0\\):"), `for` = "p0"),
     numericInput(
       "p0",
@@ -47,7 +48,23 @@ ui <- page_sidebar(
       max = 1,
       step = 0.01
     ),
-    uiOutput("sample_input_ui"),
+
+    conditionalPanel(
+      condition = "input.input_type == 'csv'",
+      fileInput(
+        "csv_file",
+        "Upload CSV File",
+        accept = c(".csv")
+      ),
+      uiOutput("categorical_var_ui"),
+      uiOutput("success_level_ui")
+    ),
+
+    conditionalPanel(
+      condition = "input.input_type != 'csv'",
+      uiOutput("sample_input_ui")
+    ),
+
     tags$label(HTML("Significance Level, \\(\\alpha\\):"), `for` = "alpha"),
     numericInput(
       "alpha",
@@ -57,6 +74,7 @@ ui <- page_sidebar(
       max = 0.5,
       step = 0.001
     ),
+
     withMathJax(
       radioButtons(
         "alt",
@@ -65,7 +83,8 @@ ui <- page_sidebar(
           "\\(p \\ne p_0\\)" = "two.sided",
           "\\(p > p_0\\)" = "greater",
           "\\(p < p_0\\)" = "less"
-        )
+        ),
+        selected = "two.sided"
       )
     )
   ),
@@ -74,20 +93,23 @@ ui <- page_sidebar(
     layout_columns(
       col_widths = c(6, 6, 12),
       row_heights = c(1, 1, 2),
+
       card(
         full_screen = TRUE,
         card_header("Hypothesis Test Input Summary"),
         uiOutput("hypothesis_summary")
       ),
+
       card(
         full_screen = TRUE,
         card_header("Hypothesis Test Results"),
         reactableOutput("results_table")
       ),
+
       card(
         full_screen = TRUE,
         card_header("\\(p\\)-Value Plot"),
-        plotOutput("pvalue_plot")
+        plotOutput("pvalue_plot", height = "450px")
       )
     )
   )
@@ -102,7 +124,7 @@ server <- function(input, output, session) {
 
   fmtp <- function(p) {
     ifelse(
-      p < 1e-4, 
+      p < 1e-4,
       "< 0.0001",
       formatC(p, format = "f", digits = 6)
     )
@@ -123,10 +145,8 @@ server <- function(input, output, session) {
           max = 1,
           step = 0.001
         ),
-        tags$label(
-          "Sample Size:",
-          `for` = "n"
-        ),
+
+        tags$label("Sample Size:", `for` = "n"),
         numericInput(
           "n",
           label = NULL,
@@ -137,10 +157,7 @@ server <- function(input, output, session) {
       )
     } else {
       tagList(
-        tags$label(
-          "Number of Successes:",
-          `for` = "x"
-        ),
+        tags$label("Number of Successes:", `for` = "x"),
         numericInput(
           "x",
           label = NULL,
@@ -148,10 +165,8 @@ server <- function(input, output, session) {
           min = 0,
           step = 1
         ),
-        tags$label(
-          "Sample Size:",
-          `for` = "n_count"
-        ),
+
+        tags$label("Sample Size:", `for` = "n_count"),
         numericInput(
           "n_count",
           label = NULL,
@@ -163,6 +178,67 @@ server <- function(input, output, session) {
     }
   })
 
+  uploaded_data <- reactive({
+    req(input$csv_file)
+
+    read.csv(
+      input$csv_file$datapath,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  })
+
+  categorical_vars <- reactive({
+    df <- uploaded_data()
+
+    names(df)[sapply(df, function(x) {
+      is.character(x) || is.factor(x) || is.logical(x)
+    })]
+  })
+
+  output$categorical_var_ui <- renderUI({
+    req(uploaded_data())
+
+    vars <- categorical_vars()
+
+    validate(
+      need(
+        length(vars) > 0,
+        "The uploaded CSV must contain at least one categorical variable."
+      )
+    )
+
+    selectInput(
+      "cat_var",
+      "Choose Categorical Variable",
+      choices = vars,
+      selected = vars[1]
+    )
+  })
+
+  output$success_level_ui <- renderUI({
+    req(uploaded_data(), input$cat_var)
+
+    values <- uploaded_data()[[input$cat_var]]
+    values <- values[!is.na(values)]
+
+    levels_available <- sort(unique(as.character(values)))
+
+    validate(
+      need(
+        length(levels_available) > 0,
+        "The selected categorical variable has no non-missing values."
+      )
+    )
+
+    selectInput(
+      "success_level",
+      "Choose Success Category",
+      choices = levels_available,
+      selected = levels_available[1]
+    )
+  })
+
   calc <- reactive({
     req(input$p0, input$alt)
 
@@ -170,7 +246,8 @@ server <- function(input, output, session) {
     alt <- input$alt
 
     validate(
-      need(p0 >= 0 && p0 <= 1, "Null proportion must be between 0 and 1.")
+      need(p0 >= 0 && p0 <= 1, "Null proportion must be between 0 and 1."),
+      need(p0 > 0 && p0 < 1, "Null proportion must be strictly between 0 and 1 for the z test.")
     )
 
     if (input$input_type == "prop") {
@@ -189,19 +266,14 @@ server <- function(input, output, session) {
 
       ph <- input$p_hat
       n <- input$n
-      x <- round(ph*n)
-    } else {
+      x <- round(ph * n)
+
+    } else if (input$input_type == "count") {
       req(input$x, input$n_count)
 
       validate(
-        need(
-          input$x >= 0,
-          "Number of successes must be nonnegative."
-        ),
-        need(
-          input$n_count >= 1,
-          "Sample size must be at least 1."
-        ),
+        need(input$x >= 0, "Number of successes must be nonnegative."),
+        need(input$n_count >= 1, "Sample size must be at least 1."),
         need(
           input$x <= input$n_count,
           "Number of successes cannot exceed the sample size."
@@ -210,17 +282,31 @@ server <- function(input, output, session) {
 
       x <- input$x
       n <- input$n_count
-      ph <- x/n
+      ph <- x / n
+
+    } else {
+      req(uploaded_data(), input$cat_var, input$success_level)
+
+      values <- uploaded_data()[[input$cat_var]]
+      values <- values[!is.na(values)]
+
+      n <- length(values)
+      x <- sum(as.character(values) == as.character(input$success_level))
+      ph <- x / n
+
+      validate(
+        need(n >= 1, "The selected categorical variable has no non-missing values.")
+      )
     }
 
-    se <- sqrt(p0*(1 - p0)/n)
-    z <- (ph - p0)/se
+    se <- sqrt(p0 * (1 - p0) / n)
+    z <- (ph - p0) / se
 
     p_val <- switch(
       alt,
-      "two.sided" = 2*pnorm(-abs(z)),
-      "greater"   = 1 - pnorm(z),
-      "less"      = pnorm(z)
+      "two.sided" = 2 * pnorm(-abs(z)),
+      "greater" = 1 - pnorm(z),
+      "less" = pnorm(z)
     )
 
     list(
@@ -241,8 +327,8 @@ server <- function(input, output, session) {
     alt_text <- switch(
       cdat$alt,
       "two.sided" = paste0("\\(H_a: p \\ne ", fmt(cdat$p0, 4), "\\)"),
-      "greater"   = paste0("\\(H_a: p > ", fmt(cdat$p0, 4), "\\)"),
-      "less"      = paste0("\\(H_a: p < ", fmt(cdat$p0, 4), "\\)")
+      "greater" = paste0("\\(H_a: p > ", fmt(cdat$p0, 4), "\\)"),
+      "less" = paste0("\\(H_a: p < ", fmt(cdat$p0, 4), "\\)")
     )
 
     tagList(
@@ -251,6 +337,7 @@ server <- function(input, output, session) {
       tags$p(HTML(alt_text)),
       tags$p(HTML(paste0("\\(p_0 = ", fmt(cdat$p0, 4), "\\)"))),
       tags$p(HTML(paste0("\\(\\hat{p} = ", fmt(cdat$ph, 4), "\\)"))),
+      tags$p(HTML(paste0("\\(x = ", round(cdat$x, 0), "\\)"))),
       tags$p(HTML(paste0("\\(n = ", cdat$n, "\\)")))
     )
   })
@@ -275,12 +362,13 @@ server <- function(input, output, session) {
 
     mathjax_render(
       reactable(
-        tibble(
+        data.frame(
           "Standard Error" = fmt(cdat$se, 4),
           "\\(z\\)-Statistic" = fmt(cdat$z, 4),
-          "\\(p\\)-Value" = fmtp(cdat$p_val)
+          "\\(p\\)-Value" = fmtp(cdat$p_val),
+          check.names = FALSE
         ),
-        defaultColDef = colDef(align = 'right')
+        defaultColDef = colDef(align = "right")
       )
     )
   })
@@ -289,148 +377,179 @@ server <- function(input, output, session) {
     cdat <- calc()
 
     x_grid <- seq(-4.5, 4.5, length.out = 2000)
-
-    curve_df <- tibble(
-      x = x_grid,
-      y = dnorm(x_grid)
-    )
+    y_grid <- dnorm(x_grid)
 
     z_obs <- cdat$z
     z_abs <- abs(z_obs)
 
-    left_tail  <- curve_df %>% filter(x <= -z_abs)
-    right_tail <- curve_df %>% filter(x >=  z_abs)
-    left_one   <- curve_df %>% filter(x <= z_obs)
-    right_one  <- curve_df %>% filter(x >= z_obs)
+    par(
+      mar = c(5, 4, 4, 2),
+      bty = "n"
+    )
 
-    p <- ggplot(curve_df, aes(x, y)) +
-      geom_line(linewidth = 1.2, color = "black") +
-      labs(
-        x = "z",
-        y = "Density"
-      ) +
-      coord_cartesian(xlim = c(-4.5, 4.5), ylim = c(0, 0.42)) +
-      theme_minimal(base_size = 18) +
-      theme(
-        panel.grid.minor = element_blank(),
-        panel.grid.major.x = element_blank(),
-        panel.grid.major.y = element_blank(),
-        axis.title = element_text(color = "black"),
-        axis.text = element_text(color = "black")
-      )
+    plot(
+      x_grid,
+      y_grid,
+      type = "n",
+      xlim = c(-4.5, 4.5),
+      ylim = c(0, 0.42),
+      xlab = "z",
+      ylab = "Density",
+      main = "",
+      axes = FALSE
+    )
+
+    axis(side = 1)
+    axis(side = 2, las = 1)
+
+    lines(
+      x_grid,
+      y_grid,
+      lwd = 3,
+      col = "black"
+    )
+
+    shade_color <- adjustcolor("#CC3366", alpha.f = 0.30)
+    line_color <- "#FF5A36"
+    label_color <- "#CC2244"
 
     if (cdat$alt == "two.sided") {
+      left_index <- x_grid <= -z_abs
+      right_index <- x_grid >= z_abs
 
-      left_lab_x  <- max(-3.2, -z_abs - 0.95)
-      right_lab_x <- min( 3.2,  z_abs + 0.95)
-      tail_lab <- paste0("Area = ", formatC(cdat$p_val / 2, format = "f", digits = 4))
+      left_x <- x_grid[left_index]
+      left_y <- y_grid[left_index]
 
-      p <- p +
-        geom_area(
-          data = left_tail,
-          aes(x = x, y = y),
-          inherit.aes = FALSE,
-          fill = "#CC3366",
-          alpha = 0.30
-        ) +
-        geom_area(
-          data = right_tail,
-          aes(x = x, y = y),
-          inherit.aes = FALSE,
-          fill = "#CC3366",
-          alpha = 0.30
-        ) +
-        geom_vline(
-          xintercept = c(-z_abs, z_abs),
-          color = "#FF5A36",
-          linewidth = 1.1,
-          linetype = "dashed"
-        ) +
-        annotate(
-          "label",
-          x = left_lab_x,
-          y = 0.06,
-          label = tail_lab,
-          fill = "white",
-          color = "#CC2244",
-          label.size = 0.3,
-          size = 6,
-          alpha = 0.75
-        ) +
-        annotate(
-          "label",
-          x = right_lab_x,
-          y = 0.06,
-          label = tail_lab,
-          fill = "white",
-          color = "#CC2244",
-          label.size = 0.3,
-          size = 6,
-          alpha = 0.75
-        )
+      right_x <- x_grid[right_index]
+      right_y <- y_grid[right_index]
+
+      polygon(
+        c(left_x, rev(left_x)),
+        c(left_y, rep(0, length(left_y))),
+        col = shade_color,
+        border = NA
+      )
+
+      polygon(
+        c(right_x, rev(right_x)),
+        c(right_y, rep(0, length(right_y))),
+        col = shade_color,
+        border = NA
+      )
+
+      lines(x_grid, y_grid, lwd = 3, col = "black")
+
+      segments(
+        x0 = -z_abs,
+        y0 = 0,
+        x1 = -z_abs,
+        y1 = dnorm(-z_abs),
+        col = line_color,
+        lwd = 2,
+        lty = 2
+      )
+
+      segments(
+        x0 = z_abs,
+        y0 = 0,
+        x1 = z_abs,
+        y1 = dnorm(z_abs),
+        col = line_color,
+        lwd = 2,
+        lty = 2
+      )
+
+      tail_lab <- paste0(
+        "Area = ",
+        formatC(cdat$p_val / 2, format = "f", digits = 4)
+      )
+
+      text(
+        x = max(-3.2, -z_abs - 0.95),
+        y = 0.06,
+        labels = tail_lab,
+        col = label_color,
+        cex = 1
+      )
+
+      text(
+        x = min(3.2, z_abs + 0.95),
+        y = 0.06,
+        labels = tail_lab,
+        col = label_color,
+        cex = 1
+      )
 
     } else if (cdat$alt == "greater") {
+      right_index <- x_grid >= z_obs
+      right_x <- x_grid[right_index]
+      right_y <- y_grid[right_index]
 
-      lab_x <- min(3.2, z_obs + 1.0)
+      polygon(
+        c(right_x, rev(right_x)),
+        c(right_y, rep(0, length(right_y))),
+        col = shade_color,
+        border = NA
+      )
 
-      p <- p +
-        geom_area(
-          data = right_one,
-          aes(x = x, y = y),
-          inherit.aes = FALSE,
-          fill = "#CC3366",
-          alpha = 0.30
-        ) +
-        geom_vline(
-          xintercept = z_obs,
-          color = "#FF5A36",
-          linewidth = 1.1,
-          linetype = "dashed"
-        ) +
-        annotate(
-          "label",
-          x = lab_x,
-          y = 0.06,
-          label = paste0("Area = ", formatC(cdat$p_val, format = "f", digits = 4)),
-          fill = "white",
-          color = "#CC2244",
-          label.size = 0.3,
-          size = 6,
-          alpha = 0.75
-        )
+      lines(x_grid, y_grid, lwd = 3, col = "black")
+
+      segments(
+        x0 = z_obs,
+        y0 = 0,
+        x1 = z_obs,
+        y1 = dnorm(z_obs),
+        col = line_color,
+        lwd = 2,
+        lty = 2
+      )
+
+      text(
+        x = min(3.2, z_obs + 1.0),
+        y = 0.06,
+        labels = paste0(
+          "Area = ",
+          formatC(cdat$p_val, format = "f", digits = 4)
+        ),
+        col = label_color,
+        cex = 1
+      )
 
     } else {
+      left_index <- x_grid <= z_obs
+      left_x <- x_grid[left_index]
+      left_y <- y_grid[left_index]
 
-      lab_x <- max(-3.2, z_obs - 1.0)
+      polygon(
+        c(left_x, rev(left_x)),
+        c(left_y, rep(0, length(left_y))),
+        col = shade_color,
+        border = NA
+      )
 
-      p <- p +
-        geom_area(
-          data = left_one,
-          aes(x = x, y = y),
-          inherit.aes = FALSE,
-          fill = "#CC3366",
-          alpha = 0.30
-        ) +
-        geom_vline(
-          xintercept = z_obs,
-          color = "#FF5A36",
-          linewidth = 1.1,
-          linetype = "dashed"
-        ) +
-        annotate(
-          "label",
-          x = lab_x,
-          y = 0.06,
-          label = paste0("Area = ", formatC(cdat$p_val, format = "f", digits = 4)),
-          fill = "white",
-          color = "#CC2244",
-          label.size = 0.3,
-          size = 6,
-          alpha = 0.75
-        )
+      lines(x_grid, y_grid, lwd = 3, col = "black")
+
+      segments(
+        x0 = z_obs,
+        y0 = 0,
+        x1 = z_obs,
+        y1 = dnorm(z_obs),
+        col = line_color,
+        lwd = 2,
+        lty = 2
+      )
+
+      text(
+        x = max(-3.2, z_obs - 1.0),
+        y = 0.06,
+        labels = paste0(
+          "Area = ",
+          formatC(cdat$p_val, format = "f", digits = 4)
+        ),
+        col = label_color,
+        cex = 1
+      )
     }
-
-    p
   })
 }
 
